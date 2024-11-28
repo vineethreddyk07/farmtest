@@ -8,28 +8,49 @@ import {
     ViewChild,
     EventEmitter,
     Output,
+    AfterViewInit,
   } from '@angular/core';
   import { BasemapService } from 'src/app/basemap/basemap.service';
+  import { DragBox } from 'ol/interaction.js';
   import { platformModifierKeyOnly } from 'ol/events/condition.js';
+  import { Select } from 'ol/interaction';
+  import Polygon from 'ol/geom/Polygon';
+  import { unByKey } from 'ol/Observable.js';
   import { CommonService } from '../../Services/common.service';
+  import { features } from 'process';
   import Overlay from 'ol/Overlay';
+  import { containsExtent } from 'ol/extent';
   import CircleStyle from 'ol/style/Circle';
+  import { MatExpansionModule } from '@angular/material/expansion';
+  import { Heatmap as HeatmapLayer } from 'ol/layer';
+  import Text from 'ol/style/Text';
+  import { GeotrayMenuComponent } from '../geotray-menu/geotray-menu.component';
   import { Circle, Fill, Stroke, Style, Icon } from 'ol/style.js';
+  import proj4 from 'proj4';
+  import { register } from 'ol/proj/proj4.js';
   import Draw from 'ol/interaction/Draw.js';
   import Feature from 'ol/Feature.js';
   import Point from 'ol/geom/Point.js';
   import VectorSource from 'ol/source/Vector.js';
-  import { Renderer2, RendererFactory2 } from '@angular/core';
+  import { Injectable, Renderer2, RendererFactory2 } from '@angular/core';
   import OlMap from 'ol/Map';
   import { Tile as TileLayer, Vector as VectorLayer } from 'ol/layer';
+  import { emit } from 'process';
   import { LineString } from 'ol/geom';
+  import Pointer from 'ol/interaction/Pointer';
+  import { Console } from 'console';
   import { ExcelService } from 'src/app/Services/readxlsxservice';
-  import { HttpClient } from '@angular/common/http';
+  import * as XLSX from 'xlsx';
+  import { HttpClient, HttpResponse } from '@angular/common/http';
   import { MyService } from 'src/app/my-service.service';
   import { MatrixPathAEDSService } from './matrix-path-aeds.service';
   import { MatrixReverseAEDSService } from './matrix-reverse-aeds.service';
+  import { get as getProjection } from 'ol/proj.js';
   import { GeobarAlertComponent } from 'src/app/geobar-alert/geobar-alert.component';
+  import { saveAs } from 'file-saver';
+  import { min } from 'rxjs-compat/operator/min';
   import { SlopeAEDSService } from 'src/app/Services/slope-aeds.service';
+  import { DrawEvent } from 'ol/interaction/Draw';
   // import  arrow  from '../../../assets/images/arrow.png'
   import TileWMS from 'ol/source/TileWMS';
   import { AuthObservableService } from 'src/app/Services/authObservableService';
@@ -137,31 +158,16 @@ import {
       })
       // this.fileUrl = 'https://firebasestorage.googleapis.com/v0/b/geomocus-qa.appspot.com/o/static_data%2Fvermontch_utm18n.frf?alt=media&token=887f80d3-808f-4cb8-ba3d-6c3d8fff4fc3';
       // const fileUrl = 'https://firebasestorage.googleapis.com/v0/b/geomocus-qa.appspot.com/o/output.frf?alt=media&token=43f59e39-f4d0-4fa6-975f-ed743ac3a81b&_gl=1*1nhwrn*_ga*MjY1OTUyMTExLjE2NDE1MjMwNDA.*_ga_CW55HF8NVT*MTY5NzEwNDUxMy40Mi4xLjE2OTcxMDQ1MjMuNTAuMC4w';
-      console.log( "MSG: FILE URL", this.fileUrl);
-      this.fetchingFirebaseURLData();
+      console.log(this.fileUrl);
       
   }
-  updateParameters() {
-      // Parse `searchableSwath` from a comma-separated string to a number array
-      this.searchableSwath = this.searchableSwath
-        .toString()
-        .split(',')
-        .map((value) => parseFloat(value.trim()))
-        .filter((value) => !isNaN(value));
-    
-      console.log('MSG :Updated Parameters Upslope Tolerance:', this.upSlopePCTtolerance);
-      console.log('MSG :Updated Parameters Downslope Tolerance:', this.dnSlopePCTtolerance);
-      console.log('MSG :Updated Parameters Searchable Swath:', this.searchableSwath);
-      console.log('MSG :Updated Parameters Max Loops:', this.maxLoops);
-    }
-    
   
   fetchingFirebaseURLData() {
-      this.fileUrl = 'https://firebasestorage.googleapis.com/v0/b/geomocus-qa.appspot.com/o/static_data%2Fvermontch_utm18n.frf?alt=media&token=887f80d3-808f-4cb8-ba3d-6c3d8fff4fc3'
+      // this.fileUrl = 'https://firebasestorage.googleapis.com/v0/b/geomocus-qa.appspot.com/o/static_data%2Fvermontch_utm18n.frf?alt=media&token=887f80d3-808f-4cb8-ba3d-6c3d8fff4fc3'
       this.SlopeAEDSService.getTextFileData(this.fileUrl).subscribe(
           data => {
-              console.log( "MSG: FILE URL IN fetchingFirebaseURLData ", this.fileUrl);
-              if (!data) {
+              console.log(this.fileUrl);
+          if (!data) {
               // Fetching from cache
               this.SlopeAEDSService.getFileDataCache().subscribe(cachedData => {
               this.fileData = cachedData;
@@ -173,6 +179,7 @@ import {
               //console.log(data, "checkfrfdata")
               // Parse header and elevation data
               this.parseData(data);
+              console.log("MSG: Data from FRF ", data);
           }
           // Now you can work with this.fileData
           },
@@ -217,33 +224,38 @@ import {
       this.DEM.RCOUNT_ASCII = DEM.rows;
       this.DEM.CCOUNT_ASCII  = DEM.cols;
       this.DEM.CS4 = `${this.DEM.authority.trim()}:${this.DEM.hrefsys.trim()}`;
+      // this.DEM.CS4 = "EPSG:26918";
       this.DEM.CS1 = this.basemapService.getCurrentBasemap().getView().getProjection();
       this.DEM.hunits = DEM.hunits;
       this.DEM.vunits = DEM.vunits;
       this.resultsString += `DEM: ${this.DEM}\n`;
       // Save parsed elevation data into array called elevationData
       this.elevationData = elevationData;
-      console.log("MSG: DEM VALUES CS4 AND CS1", this.DEM.CS4, this.DEM.CS1)
-  
+      console.log("MSG: CS4 ", this.DEM.hrefsys, this.DEM.CS4);
       //below are derived variables, not direct inputs from FRF 
       
       //unitStd_multiplier4V = multiplication factor for Vertical to standardize units across
-       if((DEM.hunits.trim() === 'meters')  && (DEM.vunits.trim() === 'feet')){
-           this.unitStd_multiplier4V = 0.30480060960122;
-          //console.log("MSG: In parseData, CONDITION met, this.unitStd_multiplier4V", this.unitStd_multiplier4V)
-      }
-      if((DEM.hunits.trim() === 'meters')  && (DEM.vunits.trim() === '')){
-          this.unitStd_multiplier4V = 0.30480060960122;
-         //console.log("MSG: In parseData, CONDITION met, this.unitStd_multiplier4V", this.unitStd_multiplier4V)
-      }
-      if(this.DEM.hunits.trim() === 'feet' && this.DEM.vunits.trim() === 'meters'){
-           this.unitStd_multiplier4V = 1/0.30480060960122;
-       }
-       if(this.DEM.hunits.trim() === this.DEM.vunits.trim()){
-           this.unitStd_multiplier4V = 1;
-       }
+      if ((DEM.hunits.trim().toLowerCase() === 'meters' || DEM.hunits.trim().toLowerCase() === 'metre') &&
+      (DEM.vunits.trim().toLowerCase() === 'feet')) {
+      this.unitStd_multiplier4V = 0.30480060960122;
+  }
+  
+  if ((DEM.hunits.trim().toLowerCase() === 'meters' || DEM.hunits.trim().toLowerCase() === 'metre') &&
+      (DEM.vunits.trim() === '')) {
+      this.unitStd_multiplier4V = 0.30480060960122;
+  }
+  
+  if ((this.DEM.hunits.trim().toLowerCase() === 'feet') &&
+      (this.DEM.vunits.trim().toLowerCase() === 'meters' || this.DEM.vunits.trim().toLowerCase() === 'metre')) {
+      this.unitStd_multiplier4V = 1 / 0.30480060960122;
+  }
+  
+  if (this.DEM.hunits.trim().toLowerCase() === this.DEM.vunits.trim().toLowerCase()) {
+      this.unitStd_multiplier4V = 1;
+  }
+  
         
-      console.log("MSG: HUNITS, VUNITS, Conversion Factor ", this.DEM.hunits, this.DEM.vunits, this.unitStd_multiplier4V)
+      console.log("MSG: HUNITS, VUNITS, Conversion Factor ",this.unitStd_multiplier4V)
   
       this.DEM.TRC_ASCIIx = (parseFloat(this.DEM.LLC_ASCIIx) + (parseFloat(this.DEM.CCOUNT_ASCII) + 1) * parseFloat(this.DEM.Resolution)).toString();
       this.DEM.TRC_ASCIIy = (parseFloat(this.DEM.LLC_ASCIIy) + (parseFloat(this.DEM.RCOUNT_ASCII) + 1) * parseFloat(this.DEM.Resolution)).toString();
@@ -259,12 +271,12 @@ import {
       this.DEM.TRC_CS4y = this.DEM.TRC_ASCIIy;
   
       //this can be a gross approximation, need to fix this in the future based on what coordinate system CS4 would be.
-      this.DEM.Res_CS4 = ((parseFloat(this.DEM.TRC_CS4y) - parseFloat(this.DEM.LLC_CS4y)) /parseFloat(this.DEM.RCOUNT_ASCII + 1));
+      this.DEM.Res_CS4 = ((parseFloat(this.DEM.TRC_CS4y) - parseFloat(this.DEM.LLC_CS4y)) /(parseFloat(this.DEM.RCOUNT_ASCII)+ 1));
       
   
-      this.printArray2Console("Geometry of LLC Initially! ",[this.DEM.LLC_CS4x, this.DEM.LLC_CS4y]);
-      this.printArray2Console("Geometry of TRC Initially! ",[this.DEM.TRC_CS4x, this.DEM.TRC_CS4y]);
-      this.printArray2Console("Resolution of DEM!", [this.DEM.Res_CS4]);
+      this.printArray2Console("MSG: Geometry of LLC Initially! ",[this.DEM.LLC_CS4x, this.DEM.LLC_CS4y]);
+      this.printArray2Console("MSG: Geometry of TRC Initially! ",[this.DEM.TRC_CS4x, this.DEM.TRC_CS4y]);
+      this.printArray2Console("MSG: Resolution of DEM!", [this.DEM.Res_CS4]);
       
       //VINEET: Please put checks on every variable and after every variable is read in accurately, set a "go-AEDS" to 1. else make it 0.
   }
@@ -493,7 +505,7 @@ import {
           // 	if (evt.originalEvent.ctrlKey) {}
           // })
   
-          this.printArray2Console("Geometry captured from screen in CS1!", this.SearchDir_CS1);
+          this.printArray2Console("MSG: Geometry captured from screen in CS1!", this.SearchDir_CS1);
           this.loopcounter = 0;
       
           // debugger
@@ -511,7 +523,7 @@ import {
       });
       console.log(this.slopeLineId, 'slopelineid')
   
-      vectorLayer.setOpacity(0.35)
+      vectorLayer.setOpacity(1)
   
   }
   
@@ -521,8 +533,8 @@ import {
         this.drawnLine = null;
       }
   }
-  cancelSlopeElement(){
   
+  cancelSlopeElement(){
       this.basemap.on('click' , (event) => {
           const isCtrl = platformModifierKeyOnly(event)
            if(isCtrl){
@@ -585,24 +597,36 @@ import {
               
       if (this.loopcounter === 0) {
           console.log("MSG: Entered into SUIvaluesinCS4 function loopcounter", this.loopcounter);
+          console.log("MSG: this.DEM.CS1, this.DEM.CS4", this.DEM.CS1, this.DEM.CS4);
+          console.log("MSG: this.SearchDir_CS1[0][0], this.SearchDir_CS1[0][1]", this.SearchDir_CS1[0][0], this.SearchDir_CS1[0][1]);
+  
+  
           //Transform User Line vertices into CS4
           const IP_CS4 = this.basemapService.getTransformedCoordinates([this.SearchDir_CS1[0][0], this.SearchDir_CS1[0][1]], this.DEM.CS1, this.DEM.CS4); 
           const FP_CS4 = this.basemapService.getTransformedCoordinates([this.SearchDir_CS1[1][0], this.SearchDir_CS1[1][1]], this.DEM.CS1, this.DEM.CS4); 
           this.SearchDir_CS4 =  [ [IP_CS4[0],IP_CS4[1]],[FP_CS4[0],FP_CS4[1]] ];
   
-          this.printArray2Console("Geometry transformed to CS4 STEP2", this.SearchDir_CS4);
+          this.printArray2Console("MSG: Geometry transformed to CS4 STEP2", this.SearchDir_CS4);
       }
       
       this.SUI.DEM_I_col = Math.floor((this.SearchDir_CS4[0][0] - this.DEM.LLC_CS4x) / (this.DEM.Res_CS4));
       this.SUI.DEM_I_row = this.DEM.RCOUNT_ASCII - Math.floor((this.SearchDir_CS4[0][1] - this.DEM.LLC_CS4y) / (this.DEM.Res_CS4));
       this.SUI.DEM_F_col = Math.floor((this.SearchDir_CS4[1][0] - this.DEM.LLC_CS4x) / (this.DEM.Res_CS4));
       this.SUI.DEM_F_row = this.DEM.RCOUNT_ASCII - Math.floor((this.SearchDir_CS4[1][1] - this.DEM.LLC_CS4y) / (this.DEM.Res_CS4));
+      this.printArray2Console("MSG: SUI.DEM_I_col", this.SUI.DEM_I_col);
+  
       this.SUI.ILV_DEM = [[this.SUI.DEM_I_col,this.SUI.DEM_I_row],[this.SUI.DEM_F_col,this.SUI.DEM_F_row]];
+      this.printArray2Console("MSG: SUI.ILV_DEM", this.SUI.ILV_DEM);
+  
       this.SUI.IElev = this.elevationData[this.SUI.DEM_I_row - 1][this.SUI.DEM_I_col - 1];
+      this.printArray2Console("MSG: SUI.IElev", this.SUI.IElev);
+  
       this.SUI.FElev = this.elevationData[this.SUI.DEM_F_row - 1][this.SUI.DEM_F_col - 1];
+      this.printArray2Console("MSG: SUI.FElev", this.SUI.FElev);
+  
       this.upSlopeInd = this.checkInclineDir(this.SUI.DEM_I_col,this.SUI.DEM_I_row,this.SUI.DEM_F_col,this.SUI.DEM_F_row,this.SUI.IElev,this.SUI.FElev,this.upSlopePCTtolerance)
       
-      //this.printArray2Console("Geometry of LLC in SUIValues! ",[this.DEM.LLC_CS4x, this.DEM.LLC_CS4y]);
+      this.printArray2Console("MSG: Geometry of LLC in SUIValues! ",[this.DEM.LLC_CS4x, this.DEM.LLC_CS4y]);
   
       this.resultsString +=
           `User Line Vertices Lat, Long: ${this.SearchDir_CS1}\n`+
@@ -734,7 +758,7 @@ import {
   }
       
   buildGeobonZOC(CANDFr_LTOP, CANDFc_LTOP, thresh) {
-      console.log("MSG: Entered buildGeobonZOC, developing the GeobonZOC parameters")
+      //console.log("MSG: Entered buildGeobonZOC, developing the GeobonZOC parameters")
       const path = this.matrixpath.path;
       this.Geobon.GeobonZOC = [];
       for (const [pathRow, pathCol] of path) {
@@ -748,7 +772,7 @@ import {
           }
       }
       this.GeobonZOC_Length = this.Geobon.GeobonZOC.length;
-      console.log("MSG: Leaving buildGeobonZOC, finished developing the GeobonZOC parameters")
+      //console.log("MSG: Leaving buildGeobonZOC, finished developing the GeobonZOC parameters")
   }
   
   buildDEMZOC(Irow,Icol,Frow,Fcol,GZL) {
@@ -790,6 +814,7 @@ import {
                   if (GeobonZOC_CurrRow == geobonZOC_Row && GeobonZOC_CurrCol == geobonZOC_Col) {
                       //console.log("MSG: In buildDEMZOC, found matching row and column of DEM " , i, j, "against the GeobonZOC index", k);
                       this.Geobon.DEM_ZOC_Indexes.push([i, j]);
+                      // console.log("MSG: this.Geobon.DEM_ZOC_Indexes:",this.Geobon.DEM_ZOC_Indexes);
                       this.Geobon.DEM_ZOC_Eelevations.push(this.elevationData[i - 1][j - 1]);
                       this.Geobon.DEM_ZOC_ElevDiffs.push(Math.abs(this.elevationData[i - 1][j - 1] - (this.SUI.IElev)) * this.unitStd_multiplier4V);
                       this.Geobon.DEM_ZOC_CandDistances.push(Math.sqrt(Math.pow(i - Irow, 2) + Math.pow(j - Icol, 2)) * parseFloat(this.DEM.Res_CS4));
@@ -999,7 +1024,7 @@ import {
       this.ngProgress.ref().start();
       if(this.selectedLable === 'Z-Axis') {
         // window.alert('please select elevation value for generate FRF file');
-        this.authObsr.updateErrors("please select elevation value");
+        this.authObsr.updateErrors("Please select elevation value");
         this.ngProgress.ref().complete();
         return;
       }
@@ -1133,7 +1158,7 @@ import {
           window.alert('Firebase URL ' + result[1])
           // this.commonService.setFirebaseFRFUrl(result[1]);
           this.commonService.firebaseFRFUrl = result[1];
-          // this.fetchingFirebaseURLData();
+          this.fetchingFirebaseURLData();
           window.open(result[1], '_blank')
           this.loadWms(result[0], '')
         })
@@ -1174,6 +1199,5 @@ import {
   
   
   }  
-  
   
   
